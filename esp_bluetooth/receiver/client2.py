@@ -14,7 +14,7 @@ async def main():
         await client.start_notify(CHAR_UUID, callback)
 
         print("Listening for notifications...")
-        await asyncio.sleep(5)
+        await asyncio.sleep(60)
 
         await client.stop_notify(CHAR_UUID)
 
