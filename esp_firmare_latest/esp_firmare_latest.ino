@@ -1,9 +1,13 @@
 #include <Arduino.h>
 #include "BLE.h"
+#include "BatteryManager.h"
+
 
 extern "C" {
   #include "driver/spi_master.h"
 }
+
+#define ERROR_LED 16
 
 // =====================================================
 // ESP32-S3 -> ADS1298 PIN MAP
@@ -53,6 +57,19 @@ extern "C" {
 #define REG_CH1SET   0x05
 #define REG_CH8SET   0x0C
 
+#define REG_LOFF       0x04
+#define REG_RLD_SENSP  0x0D
+#define REG_RLD_SENSN  0x0E
+#define REG_LOFF_SENSP 0x0F
+#define REG_LOFF_SENSN 0x10
+#define REG_LOFF_FLIP  0x11
+#define REG_GPIO       0x14
+#define REG_PACE       0x15
+#define REG_RESP       0x16
+#define REG_CONFIG4    0x17
+#define REG_WCT1       0x18
+#define REG_WCT2       0x19
+
 // =====================================================
 // ADS1298 REGISTER VALUES / BIT MASKS
 // =====================================================
@@ -84,6 +101,8 @@ uint8_t txFrame[TOTAL_FRAME_BYTES];
 uint8_t rxFrame[TOTAL_FRAME_BYTES];
 
 volatile bool drdyFlag = false;
+
+BatteryManager batteryManager(6, 7);
 
 // =====================================================
 // INTERRUPT
@@ -206,40 +225,68 @@ void adsHardwareReset() {
 // =====================================================
 // ADS1298 CONFIGURATION
 // =====================================================
+struct AdsRegConfig {
+  uint8_t reg;
+  uint8_t value;
+};
+
+const AdsRegConfig adsConfig[] = {
+  {REG_CONFIG1,    0xE5},
+  {REG_CONFIG2,    0x10},
+  {REG_CONFIG3,    0xC8},
+  {REG_LOFF,       0x03},
+
+  {REG_CH1SET,     0x80},
+  {REG_CH1SET + 1, 0x80},
+  {REG_CH1SET + 2, 0x80},
+  {REG_CH1SET + 3, 0x80},
+  {REG_CH1SET + 4, 0x80},
+  {REG_CH1SET + 5, 0x60},
+  {REG_CH1SET + 6, 0x60},
+  {REG_CH1SET + 7, 0x60},
+
+  {REG_RLD_SENSP,  0x00},
+  {REG_RLD_SENSN,  0x00},
+  {REG_LOFF_SENSP, 0x00},
+  {REG_LOFF_SENSN, 0x00},
+  {REG_LOFF_FLIP,  0x00},
+
+  {REG_GPIO,       0x00},
+  {REG_PACE,       0x00},
+  {REG_RESP,       0xF0},
+  {REG_CONFIG4,    0x20},
+  {REG_WCT1,       0x0A},
+  {REG_WCT2,       0x23},
+};
+
 void configureAds1298() {
   adsCommand(CMD_SDATAC);
   delay(10);
 
-  adsWriteRegister(
-    REG_CONFIG1,
-    CONFIG1_HIGH_RES_1KSPS | CONFIG1_DAISY_EN | CONFIG1_CLK_EN
-  );
-  delay(5);
-
-  adsWriteRegister(REG_CONFIG2, CONFIG2_DEFAULT);
-  delay(5);
-
-  adsWriteRegister(REG_CONFIG3, CONFIG3_DEFAULT | CONFIG3_PD_REFBUF);
-  delay(150);
-
-  for (uint8_t reg = REG_CH1SET; reg <= REG_CH8SET; reg++) {
-    adsWriteRegister(reg, CH_GAIN_6X | CH_ELECTRODE_IN);
-    delay(1);
+  for (size_t i = 0; i < sizeof(adsConfig) / sizeof(adsConfig[0]); i++) {
+    adsWriteRegister(adsConfig[i].reg, adsConfig[i].value);
+    delayMicroseconds(10);
   }
 
-  Serial.println("Register readback:");
+  Serial.println("ADS1298 register readback:");
 
-  Serial.print("ID      = 0x");
-  Serial.println(adsReadRegister(REG_ID), HEX);
+  for (size_t i = 0; i < sizeof(adsConfig) / sizeof(adsConfig[0]); i++) {
+    uint8_t actual = adsReadRegister(adsConfig[i].reg);
 
-  Serial.print("CONFIG1 = 0x");
-  Serial.println(adsReadRegister(REG_CONFIG1), HEX);
+    Serial.print("REG 0x");
+    Serial.print(adsConfig[i].reg, HEX);
+    Serial.print(" = 0x");
+    Serial.print(actual, HEX);
 
-  Serial.print("CONFIG2 = 0x");
-  Serial.println(adsReadRegister(REG_CONFIG2), HEX);
+    if (actual != adsConfig[i].value) {
+      Serial.print("  EXPECTED 0x");
+      Serial.print(adsConfig[i].value, HEX);
+      Serial.print("  MISMATCH");
+      digitalWrite(ERROR_LED, HIGH);   // Turn on fault LED
+    }
 
-  Serial.print("CONFIG3 = 0x");
-  Serial.println(adsReadRegister(REG_CONFIG3), HEX);
+    Serial.println();
+  }
 }
 
 // =====================================================
@@ -330,6 +377,19 @@ void setup() {
 
   Serial.println();
   Serial.println("ESP32-S3 ADS1298 single-file DMA test");
+
+  pinMode(ERROR_LED, OUTPUT);
+  digitalWrite(ERROR_LED, LOW);
+
+  Serial.println("Setting up BQ25186...");
+
+  if (batteryManager.begin()) {
+    Serial.println("BQ25186 configured.");
+    batteryManager.printRegisters();
+  } else {
+    Serial.println("BQ25186 not responding.");
+    digitalWrite(ERROR_LED, HIGH);   // Turn on fault LED
+  }
 
   pinMode(ADS_PWDN, OUTPUT);
   pinMode(ADS_RESET, OUTPUT);
