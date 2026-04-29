@@ -299,10 +299,7 @@ void printVoltagesCsv() {
 
 
 void sendVoltagesBLE() {
-  char voltageString[20];
-  uint8_t comma = ',';
-  uint8_t newline = '\n';
-  ssize_t voltageStringLen;
+  float voltages[16];
   for (int dev = 0; dev < NUM_ADS; dev++) {
     int base = dev * BYTES_PER_ADS_FRAME;
     int chBase = base + 3;
@@ -318,11 +315,10 @@ void sendVoltagesBLE() {
       int32_t code = signExtend24(raw);
       float volts = codeToVolts(code);
 
-      
-      voltageStringLen=snprintf(voltageString, sizeof(voltageString), "%.06f", volts);
-      BLE::sendData((uint8_t *)voltageString, voltageStringLen);
+      voltages[dev * ADS_CHANNELS + ch] = volts;
     }
   }
+  BLE::sendData((uint8_t *)voltages, sizeof(voltages));
 }
 
 // =====================================================
@@ -380,5 +376,5 @@ void loop() {
 
     readDataFrame();
     sendVoltagesBLE();
-  }
+  } 
 }
